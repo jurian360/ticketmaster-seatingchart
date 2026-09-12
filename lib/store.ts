@@ -1,33 +1,77 @@
 import { promises as fs } from "fs";
+import os from "os";
 import path from "path";
 import { buildArenaLayout, buildTheatreLayout } from "./sample";
 import { DEFAULT_RULES } from "./rules";
 import type { VenueLayout } from "./types";
 
-// Dot-prefixed so the dev server's file watcher ignores our writes.
-const DATA_DIR = path.join(process.cwd(), ".seatmap-data");
-const DATA_FILE = path.join(DATA_DIR, "layouts.json");
+/**
+ * Where the demo inventory lives.
+ *
+ * Locally that is a dot-prefixed folder in the project (dot-prefixed so the dev
+ * server's file watcher ignores our writes). On a serverless host the bundle is
+ * read-only and only the temp directory can be written, so we go there instead
+ * — see `MEMORY_ONLY` below for what happens when even that fails.
+ */
+function dataDir() {
+  const override = process.env.SEATMAP_DATA_DIR;
+  if (override) return override;
+  const serverless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+  return path.join(serverless ? os.tmpdir() : process.cwd(), ".seatmap-data");
+}
 
-async function seed(): Promise<VenueLayout[]> {
-  const layouts = [buildArenaLayout(), buildTheatreLayout()].map((l) => ({
+const DATA_FILE = () => path.join(dataDir(), "layouts.json");
+
+/**
+ * Last-resort copy of the inventory, used when nothing on disk is writable.
+ * It lives as long as the server instance does, which is enough to keep the
+ * demo working, but it is not shared between instances — see the README.
+ */
+let memory: VenueLayout[] | null = null;
+let diskWritable = true;
+
+function freshLayouts(): VenueLayout[] {
+  return [buildArenaLayout(), buildTheatreLayout()].map((l) => ({
     ...l,
     updatedAt: new Date().toISOString(),
   }));
+}
+
+async function seed(): Promise<VenueLayout[]> {
+  const layouts = freshLayouts();
   await writeAll(layouts);
   return layouts;
 }
 
 async function writeAll(layouts: VenueLayout[]) {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(DATA_FILE, JSON.stringify(layouts, null, 2), "utf8");
+  memory = layouts;
+  if (!diskWritable) return;
+  try {
+    const dir = dataDir();
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "layouts.json"), JSON.stringify(layouts, null, 2), "utf8");
+  } catch (err) {
+    diskWritable = false;
+    console.warn(
+      `[seatmap] ${dataDir()} is not writable (${
+        (err as NodeJS.ErrnoException).code ?? "unknown"
+      }); keeping the demo inventory in memory for this instance only.`,
+    );
+  }
 }
 
+const withDefaults = (l: VenueLayout) => ({ ...l, rules: { ...DEFAULT_RULES, ...l.rules } });
+
 export async function listLayouts(): Promise<VenueLayout[]> {
+  if (!diskWritable) {
+    if (!memory) memory = freshLayouts();
+    return memory.map(withDefaults);
+  }
   try {
-    const raw = await fs.readFile(DATA_FILE, "utf8");
+    const raw = await fs.readFile(DATA_FILE(), "utf8");
     const parsed = JSON.parse(raw) as VenueLayout[];
     if (!Array.isArray(parsed) || parsed.length === 0) return seed();
-    return parsed.map((l) => ({ ...l, rules: { ...DEFAULT_RULES, ...l.rules } }));
+    return parsed.map(withDefaults);
   } catch {
     return seed();
   }

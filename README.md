@@ -11,7 +11,7 @@ npm test        # 32 assertions covering the no-single-seat rule
 npm run build
 ```
 
-Two demo venues are seeded on first run: **Skyline Arena** (38 sections, ~10k seats) and
+Two demo venues are seeded on first run: **Skyline Arena** (41 sections, ~10k seats) and
 **The Meridian Theatre** (5 sections). `Reset demo data` in the admin dashboard restores them.
 
 ## Stack
@@ -149,28 +149,39 @@ tests/rules.test.js                the rule, in table form
 
 ## Deploying
 
-It runs on Vercel (or any Node host) with no configuration. One thing to know before you show it to
-anyone: **where the inventory lives**.
+It runs on Vercel (or any Node host) with no configuration — but **without a database the admin
+dashboard is effectively read-only**, and the dashboard says so in a banner.
 
-`lib/store.ts` keeps the venues in a JSON file. Serverless bundles are read-only apart from the temp
-directory, so the store picks its location at runtime:
+`lib/store.ts` picks its backend at runtime:
 
-| Environment | Inventory lives in |
-| --- | --- |
-| Local `npm run dev` | `.seatmap-data/` in the project |
-| Vercel / Lambda | `os.tmpdir()`, i.e. `/tmp/.seatmap-data` |
-| Nothing writable | Memory, for the lifetime of that server instance |
-| `SEATMAP_DATA_DIR` set | That directory — point it at a mounted volume on a VPS or in Docker |
+| Environment | Inventory lives in | Edits survive? |
+| --- | --- | --- |
+| `KV_REST_API_URL` + `KV_REST_API_TOKEN` set | Redis over REST | Yes |
+| `UPSTASH_REDIS_REST_URL` + `..._TOKEN` set | Redis over REST | Yes |
+| Local `npm run dev` | `.seatmap-data/` in the project | Yes |
+| `SEATMAP_DATA_DIR` set | That directory — a mounted volume on a VPS or in Docker | Yes |
+| Vercel / Lambda, no Redis | `/tmp`, or memory if that fails | **No** |
 
-On serverless that means seats sold in one request may not be visible to the next: every instance has
-its own `/tmp`, and a cold start begins again from the seeded venues. Fine for a demo someone clicks
-through; not fine for anything real.
+That last row is the one that bites. A serverless function's `/tmp` belongs to a single instance and
+is wiped on a cold start, so a layout you save returns `200`, shows "Saved", and then reverts when
+the next request lands on a different instance and re-seeds the venues from code.
 
-To make it durable, replace the two private functions in [lib/store.ts](lib/store.ts) — the file read
-in `listLayouts` and `writeAll` — with a database (Vercel Postgres, Vercel KV, Upstash, whatever you
-already run). Nothing else in the app touches storage: the rest of the code only ever calls
-`listLayouts`, `getLayout`, `saveLayout` and `deleteLayout`. A real deployment also wants the seat
-holds described below, which belong in the same layer.
+### Making saves stick on Vercel
+
+1. Vercel dashboard → **Storage** → create a Redis / KV store (Upstash's free tier is plenty).
+2. Connect it to the project. That sets `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you.
+3. Redeploy.
+
+No dependency is needed — the store talks to the REST API with `fetch`, one key per layout
+(`seatmap:layout:<id>`) plus an index, so no single request carries more than one venue. On the
+first request after connecting, the demo venues are seeded into Redis automatically.
+
+### Using something else
+
+`Backend` in [lib/store.ts](lib/store.ts) is a five-method interface: `loadAll`, `load`, `save`,
+`remove`, `replaceAll`. Postgres, Mongo, S3, whatever you already run — implement those five and
+return it from `backend()`. Nothing outside that file touches storage. A real deployment also wants
+the seat holds described below, which belong in the same layer.
 
 ## What an MVP leaves out
 

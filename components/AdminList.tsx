@@ -15,7 +15,18 @@ export interface LayoutSummary {
   updatedAt: string;
 }
 
-export default function AdminList({ layouts }: { layouts: LayoutSummary[] }) {
+export interface StorageStatus {
+  label: string;
+  durable: boolean;
+}
+
+export default function AdminList({
+  layouts,
+  storage,
+}: {
+  layouts: LayoutSummary[];
+  storage: StorageStatus;
+}) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [pending, start] = useTransition();
@@ -83,11 +94,25 @@ export default function AdminList({ layouts }: { layouts: LayoutSummary[] }) {
             onClick={reset}
             disabled={busy || pending}
             className="rounded-md border border-line px-4 py-2.5 text-sm text-slate-400 hover:bg-panel hover:text-white disabled:opacity-50"
+            title={`Storage: ${storage.label}`}
           >
             Reset demo data
           </button>
         </div>
       </header>
+
+      {!storage.durable && (
+        <div className="mt-6 rounded-xl border border-amber-500/40 bg-amber-950/40 p-4 text-sm text-amber-100">
+          <p className="font-semibold">Changes here will not be saved</p>
+          <p className="mt-1 text-amber-200/80">
+            This deployment has no database, so layouts live in a temporary folder that belongs to a
+            single server instance and is wiped when it restarts. Edits may vanish on the next page
+            load. Connect a Redis store and set <code className="text-amber-100">KV_REST_API_URL</code>{" "}
+            and <code className="text-amber-100">KV_REST_API_TOKEN</code> to make them stick — see
+            the README.
+          </p>
+        </div>
+      )}
 
       <div className="mt-8 flex flex-wrap gap-2 rounded-xl border border-line bg-panel p-4">
         <input

@@ -1,6 +1,6 @@
 import AdminList from "@/components/AdminList";
 import { buildGeometry } from "@/lib/geometry";
-import { listLayouts } from "@/lib/store";
+import { listLayouts, storageStatus } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -19,5 +19,5 @@ export default async function AdminPage() {
       available: geo.seats.filter((s) => s.status === "available").length,
     };
   });
-  return <AdminList layouts={summaries} />;
+  return <AdminList layouts={summaries} storage={storageStatus()} />;
 }
